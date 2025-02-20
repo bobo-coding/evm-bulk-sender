@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Bulk Token Transfer</title>
+    <!-- Include ethers.js -->
+    <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+    <!-- Include web3.js from a CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/web3/dist/web3.min.js"></script>
+    <!-- Include BN.js (for handling big numbers without BigInt's "n" suffix) -->
+    <script src="https://cdn.jsdelivr.net/npm/bn.js@5.2.0/lib/bn.min.js"></script>
+    <style>
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            display: flex;
+            flex-direction: column;
+            font-family: Arial, sans-serif;
+        }
+        /* mainContent now is divided into a fixed header and a scrollable section */
+        #mainContent {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        #fixedHeader {
+            position: sticky;
+            top: 0;
+            background: #fff;
+            z-index: 10;
+            padding: 20px;
+            border-bottom: 1px solid #ddd;
+        }
+        #scrollSection {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            padding-bottom: 80px; /* extra bottom padding to reveal the "Add Recipient" button when scrolling */
+        }
+        /* Fixed buttons at the bottom */
+        #fixedButtons {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: #fff;
+            padding: 10px;
+            box-shadow: 0 -2px 5px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: auto;
+            gap: 20px;
+            z-index: 100;
+        }
+    </style>
+</head>
+<body>
+    <h2>Bulk Token Transfer</h2>
+    <div id="mainContent">
+        <div id="fixedHeader">
+            <div>
+                <label for="networkSelect">Select Network:</label>
+                <select id="networkSelect">
+                    <option value="0x1">Ethereum Mainnet</option>
+                    <option value="0x3">Ropsten Testnet</option>
+                    <option value="0x4">Rinkeby Testnet</option>
+                    <option value="0x5">Goerli Testnet</option>
+                    <option value="0x2a">Kovan Testnet</option>
+                    <option value="0xaa36a7">Sepolia Testnet</option>
+                </select>
+                <button id="switchNetworkButton">Switch Network</button>
+            </div>
+            <!-- Button to connect MetaMask -->
+            <button id="connectButton">Connect MetaMask</button>
+            <p id="accountDisplay"></p>
+            <p id="statusMsg"></p>
+            <p>
+                <label for="tokenAddress">Token Contract Address:</label>
+                <input type="text" id="tokenAddress" value="0x19cE04Ab08DaFC79428100EbEE1442F43411fbD6" placeholder="Enter token contract address" autocomplete="off" />
+                <button id="fetchBalanceButton">Fetch Balance</button>
+            </p>
+            <p id="tokenBalance"></p>
+            <p>
+                <label for="bulkContractAddress">Bulk Contract Address:</label>
+                <input type="text" id="bulkContractAddress" value="0xB2f1535E08304C8Ce2e0705040D299Fd93Cd7BDD" 
+                       placeholder="Enter BulkSend contract address" autocomplete="off" />
+            </p>
+            <!-- CSV File upload form -->
+            <h3>Upload CSV file</h3>
+            <form id="csvForm" autocomplete="off">
+                <input type="file" name="file" id="csvFile" accept=".csv" required autocomplete="off">
+                <button type="submit">Upload CSV</button>
+            </form>
+            <!-- "Parsed CSV Data - Editable" header (inserted dynamically by JS) will appear here -->
+        </div>  <!-- End of fixedHeader -->
+        <div id="scrollSection">
+            <div id="csvData"></div>
+        </div>
+    </div> <!-- End of #mainContent -->
+    
+    <!-- Fixed Buttons at the bottom -->
+    <div id="fixedButtons">
+        <button id="approveButton" style="display:none;">Approve Token Transfer</button>
+        <button id="transferButton" style="display:none;">Send Bulk Transfer</button>
+    </div>
+    
+    <script>
+        let web3;
+        let account;
+        let recipients = [];
+        let amounts = [];
+        
+        function setStatus(msg) {
+            const error = new Error(msg);
+            // Log the message along with the full stack trace in the console
+            console.log(msg, error.stack);
+            // Optionally, append the stack trace to the status element (or you can log it only in the console)
+            document.getElementById("statusMsg").innerText = msg;
+        }
+        
+        // Replace with your deployed contract address
+        // const contractAddress = "0xB2f1535E08304C8Ce2e0705040D299Fd93Cd7BDD";
+        // Replace with your contract's ABI array below
+        const contractABI = [
+            {
+                "constant": false,
+                "inputs": [
+                    { "name": "token", "type": "address" },
+                    { "name": "recipients", "type": "address[]" },
+                    { "name": "amounts", "type": "uint256[]" }
+                ],
+                "name": "bulkSend",
+                "outputs": [
+                    { "name": "", "type": "bool" }
+                ],
+                "type": "function"
+            }
+        ];
+        
+        // Connect to MetaMask when clicking the button
+        document.getElementById('connectButton').addEventListener('click', async () => {
+            if (window.ethereum) {
+                web3 = new Web3(window.ethereum);
+                try {
+                    const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+                    account = accounts[0];
+                    document.getElementById('accountDisplay').innerText = 'Connected account: ' + account;
+                } catch (e) {
+                    console.error("MetaMask connection error", e);
+                }
+            } else {
+                alert("MetaMask is not installed. Please install MetaMask and try again.");
+            }
+        });
+        
+        // Handle CSV file upload and send to the backend for parsing
+        document.getElementById('csvForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const fileInput = document.getElementById('csvFile');
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            
+            const response = await fetch('/upload', {
+                method: 'POST',
+                body: formData
+            });
+            
+            const data = await response.json();
+            if (data.error) {
+                alert(data.error);
+                return;
+            }
+            recipients = data.recipients;
+            amounts = data.amounts;
+            
+            const displayDiv = document.getElementById('csvData');
+            displayDiv.innerHTML = "<h3>Parsed CSV Data - Editable</h3>";
+            let tableHTML = '<table id="csvTable" border="1" cellspacing="0" cellpadding="5">';
+            tableHTML += '<thead><tr><th>Recipient</th><th>Amount (token)</th><th>Computed Amount (wei)</th><th>Actions</th></tr></thead>';
+            tableHTML += '<tbody>';
+            for (let i = 0; i < recipients.length; i++) {
+                tableHTML += `<tr>
+                    <td><input type="text" class="recipientInput" value="${recipients[i]}" /></td>
+                    <td><input type="text" class="amountInput" value="${amounts[i]}" /></td>
+                    <td class="weiDisplay"></td>
+                    <td><button class="deleteRowButton">Delete</button></td>
+                </tr>`;
+            }
+            tableHTML += '</tbody></table>';
+            // Add a button to manually add new recipients.
+            tableHTML += '<br/><button id="addRecipientButton">Add Recipient</button>';
+            displayDiv.innerHTML += tableHTML;
+            
+            // Set a default global token decimals if it is not set (assume 18)
+            if (!window.tokenDecimals) { window.tokenDecimals = 18; }
+
+            // Function to update the computed wei value in a row
+            // Heuristic: if the input value is short (assumed in token units), convert it to wei;
+            // otherwise, assume it's already in wei.
+            function updateWeiValue(row) {
+                const amountInput = row.querySelector('.amountInput');
+                const weiDisplay = row.querySelector('.weiDisplay');
+                let value = amountInput.value.trim();
+                if (value.length < 10) { // assume token units input if value is short
+                    try {
+                        let weiValue = ethers.utils.parseUnits(value || "0", window.tokenDecimals).toString();
+                        weiDisplay.innerText = weiValue;
+                    } catch (e) {
+                        weiDisplay.innerText = "Invalid";
+                    }
+                } else {
+                    // Otherwise assume the value is already in wei
+                    weiDisplay.innerText = value;
+                }
+            }
+
+            // Attach event listeners to each table row and update the wei column on input changes
+            document.querySelectorAll("#csvTable tbody tr").forEach(row => {
+                updateWeiValue(row);
+                row.querySelector('.amountInput').addEventListener('input', () => {
+                    updateWeiValue(row);
+                });
+                row.querySelector('.deleteRowButton').addEventListener('click', () => {
+                    row.remove();
+                });
+            });
+
+            // Event listener for adding a new row manually
+            document.getElementById('addRecipientButton').addEventListener('click', () => {
+                const tbody = document.querySelector("#csvTable tbody");
+                const newRow = document.createElement('tr');
+                newRow.innerHTML = `<td><input type="text" class="recipientInput" value="" /></td>
+                    <td><input type="text" class="amountInput" value="0" /></td>
+                    <td class="weiDisplay">0</td>
+                    <td><button class="deleteRowButton">Delete</button></td>`;
+                tbody.appendChild(newRow);
+                updateWeiValue(newRow);
+                newRow.querySelector('.amountInput').addEventListener('input', () => {
+                    updateWeiValue(newRow);
+                });
+                newRow.querySelector('.deleteRowButton').addEventListener('click', () => {
+                    newRow.remove();
+                });
+            });
+            
+            // Show the approval and transfer buttons once valid data is available
+            if (recipients.length > 0 && amounts.length > 0) {
+                document.getElementById('approveButton').style.display = 'block';
+                document.getElementById('transferButton').style.display = 'block';
+            }
+        });
+        
+        // Initiate bulk transfer: call the smart contract function through MetaMask
+        document.getElementById('transferButton').addEventListener('click', async () => {
+            console.log("Transfer button clicked");
+            if (!account) {
+                setStatus("Please connect MetaMask first.");
+                return;
+            }
+            
+            const table = document.getElementById("csvTable");
+            let updatedRecipients = [];
+            let updatedAmounts = [];
+            
+            try {
+                for (let row of table.tBodies[0].rows) {
+                    // Get recipient address from first cell.
+                    const addressInput = row.cells[0].querySelector("input").value.trim();
+                    // Instead of reading the raw token amount (cell 2), read the computed value from the weiDisplay cell.
+                    const computedAmount = row.querySelector('.weiDisplay').innerText.trim();
+                    
+                    // 地址校验
+                    if (!web3.utils.isAddress(addressInput)) {
+                        setStatus(`Invalid address: ${addressInput}`);
+                        return;
+                    }
+                    
+                    try {
+                        const amount = ethers.BigNumber.from(computedAmount);
+                        updatedRecipients.push(addressInput);
+                        updatedAmounts.push(amount);
+                    } catch(e) {
+                        setStatus(`Invalid computed wei amount: ${computedAmount}`);
+                        return;
+                    }
+                }
+                
+                console.log("Calling bulkTransfer with:", {
+                    recipients: JSON.stringify(updatedRecipients),
+                    amounts: updatedAmounts.map(a => a.toString())
+                });
+                
+                const tokenAddr = document.getElementById("tokenAddress").value.trim();
+                const bulkContractAddr = document.getElementById("bulkContractAddress").value.trim();
+                const contract = new web3.eth.Contract(contractABI, bulkContractAddr);
+                const tx = await contract.methods.bulkSend(
+                    tokenAddr,
+                    updatedRecipients,
+                    updatedAmounts.map(a => a.toString())
+                ).send({ from: account });
+                
+                setStatus("Transaction confirmed! Hash: " + tx.transactionHash);
+                
+            } catch (error) {
+                console.error("Transaction error:", error);
+                setStatus("Transaction failed: " + error.message);
+            }
+        });
+        
+        // Add event listener for network switching
+        document.getElementById('switchNetworkButton').addEventListener('click', async () => {
+            if (!window.ethereum) {
+                alert('MetaMask is not installed');
+                return;
+            }
+            const selectedChainId = document.getElementById('networkSelect').value;
+            try {
+                await window.ethereum.request({
+                    method: 'wallet_switchEthereumChain',
+                    params: [{ chainId: selectedChainId }]
+                });
+                alert("Switched to network: " + selectedChainId);
+            } catch (error) {
+                if (error.code === 4902) {
+                    alert("This network is not added in your MetaMask.");
+                } else {
+                    console.error("Error switching network", error);
+                    alert("Failed to switch network. See console for details.");
+                }
+            }
+        });
+        
+        // Fetch token balance for the connected wallet on button click
+        document.getElementById("fetchBalanceButton").addEventListener("click", async () => {
+            // Ensure MetaMask is connected
+            if (!account) {
+                setStatus("Please connect MetaMask first!");
+                return;
+            }
+            const tokenAddress = document.getElementById("tokenAddress").value.trim();
+            if (!web3.utils.isAddress(tokenAddress)) {
+                setStatus("Please enter a valid token contract address");
+                return;
+            }
+            try {
+                // Minimal ERC20 ABI: balanceOf and decimals
+                const erc20Abi = [
+                    {
+                        "constant": true,
+                        "inputs": [{"name": "_owner", "type": "address"}],
+                        "name": "balanceOf",
+                        "outputs": [{"name": "balance", "type": "uint256"}],
+                        "type": "function"
+                    },
+                    {
+                        "constant": true,
+                        "inputs": [],
+                        "name": "decimals",
+                        "outputs": [{"name": "", "type": "uint8"}],
+                        "type": "function"
+                    },
+                    {
+                        "constant": true,
+                        "inputs": [
+                            {"name": "_owner", "type": "address"},
+                            {"name": "_spender", "type": "address"}
+                        ],
+                        "name": "allowance",
+                        "outputs": [{"name": "remaining", "type": "uint256"}],
+                        "type": "function"
+                    }
+                ];
+                const tokenContract = new web3.eth.Contract(erc20Abi, tokenAddress);
+                // Fetch decimals from the token contract; fallback to 18 if not available
+                let decimals = 18;
+                if (typeof tokenContract.methods.decimals === 'function') {
+                    decimals = await tokenContract.methods.decimals().call();
+                }
+                // Fetch the balance for the connected account
+                let balance = await tokenContract.methods.balanceOf(account).call();
+                // Convert balance to human readable units
+                if (decimals == 18) {
+                    balance = web3.utils.fromWei(balance, "ether");
+                } else {
+                    balance = balance / (10 ** decimals);
+                }
+                // Fetch allowance from the connected account to the bulksend contract
+                const bulkContractAddr = document.getElementById("bulkContractAddress").value.trim();
+                let allowance;
+                if (typeof tokenContract.methods.allowance === "function") {
+                    allowance = await tokenContract.methods.allowance(account, bulkContractAddr).call();
+                } else {
+                    // Allowance is available as a public mapping (declared as "mapping(address => mapping(address => uint256)) public override allowance")
+                    // but no getter function is provided in the ABI.
+                    // In this case, construct the call data manually:
+                    // Step 1: Compute the function selector for "allowance(address,address)"
+                    const methodSig = web3.utils.sha3("allowance(address,address)").slice(0, 10);
+                    // Step 2: Encode the parameters (owner and spender) without the "0x" prefix
+                    const ownerEncoded = web3.eth.abi.encodeParameter('address', account).substring(2);
+                    const spenderEncoded = web3.eth.abi.encodeParameter('address', bulkContractAddr).substring(2);
+                    // Step 3: Concatenate the function selector with the encoded parameters
+                    const data = methodSig + ownerEncoded + spenderEncoded;
+                    // Step 4: Make a low-level call to the token contract
+                    const result = await web3.eth.call({ to: tokenAddress, data: data });
+                    // Step 5: Decode the result as a uint256
+                    allowance = web3.eth.abi.decodeParameter('uint256', result);
+                }
+                if (decimals == 18) {
+                    allowance = web3.utils.fromWei(allowance, "ether");
+                } else {
+                    allowance = allowance / (10 ** decimals);
+                }
+                document.getElementById("tokenBalance").innerText = "Token Balance: " + balance + " ; Allowance: " + allowance;
+            } catch (err) {
+                console.error("Error fetching token balance", err);
+                setStatus("Failed to fetch token balance. Error: " + err.message);
+            }
+        });
+
+        // Add event listener for token approval (first step)
+        document.getElementById("approveButton").addEventListener("click", async () => {
+            console.log("Approve button clicked");
+            // Ensure MetaMask is connected
+            if (!account) {
+                setStatus("Please connect MetaMask first!");
+                return;
+            }
+            console.log("Account connected:", account);
+
+            // Get token contract address and validate it
+            const tokenAddress = document.getElementById("tokenAddress").value.trim();
+            console.log("Token address:", tokenAddress);
+            if (!web3.utils.isAddress(tokenAddress)) {
+                setStatus("Please enter a valid token contract address");
+                return;
+            }
+
+            // Sum token amounts from the CSV table (amounts are expected in wei)
+            const table = document.getElementById("csvTable");
+            if (!table) {
+                alert("Please upload CSV and fill the table first!");
+                return;
+            }
+            console.log("CSV table found, processing rows");
+            let totalAmount = ethers.BigNumber.from(0);
+            for (let row of table.tBodies[0].rows) {
+                // Read the computed value from the 'weiDisplay' cell
+                const weiValue = row.querySelector('.weiDisplay').innerText.trim();
+                console.log("Computed wei amount from row:", weiValue);
+                try {
+                    let a = ethers.BigNumber.from(weiValue);
+                    totalAmount = totalAmount.add(a);
+                } catch(e) {
+                    setStatus("Invalid wei amount in table encountered: " + weiValue);
+                    return;
+                }
+            }
+            console.log("Total approval amount (wei):", totalAmount.toString());
+
+            // Minimal ERC20 ABI including approve (using full JSON objects)
+            const erc20Abi = [
+                {
+                    "constant": true,
+                    "inputs": [{"name": "_owner", "type": "address"}],
+                    "name": "balanceOf",
+                    "outputs": [{"name": "balance", "type": "uint256"}],
+                    "type": "function"
+                },
+                {
+                    "constant": true,
+                    "inputs": [],
+                    "name": "decimals",
+                    "outputs": [{"name": "", "type": "uint8"}],
+                    "type": "function"
+                },
+                {
+                    "constant": false,
+                    "inputs": [
+                        {"name": "_spender", "type": "address"},
+                        {"name": "_value", "type": "uint256"}
+                    ],
+                    "name": "approve",
+                    "outputs": [{"name": "", "type": "bool"}],
+                    "type": "function"
+                }
+            ];
+
+            const tokenContract = new web3.eth.Contract(erc20Abi, tokenAddress);
+            console.log("Calling approve on token contract...");
+
+            try {
+                const bulkContractAddr = document.getElementById("bulkContractAddress").value.trim();
+                await tokenContract.methods.approve(bulkContractAddr, totalAmount.toString()).send({ from: account })
+                    .on('transactionHash', (hash) => {
+                        console.log("Approval transaction hash:", hash);
+                        setStatus("Approval transaction submitted: " + hash);
+                    })
+                    .on('receipt', (receipt) => {
+                        console.log("Approval transaction receipt:", receipt);
+                        setStatus("Approval confirmed!");
+                    });
+            } catch (err) {
+                console.error("Approval error:", err);
+                setStatus("Approval failed: " + err.message);
+            }
+        });
+    </script>
+</body>
+</html> 
