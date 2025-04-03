@@ -78,13 +78,13 @@
             <p id="statusMsg"></p>
             <p>
                 <label for="tokenAddress">Token Contract Address:</label>
-                <input type="text" id="tokenAddress" value="0x19cE04Ab08DaFC79428100EbEE1442F43411fbD6" placeholder="Enter token contract address" autocomplete="off" />
+                <input type="text" id="tokenAddress" value="{{ token_address }}" placeholder="Enter token contract address" autocomplete="off" />
                 <button id="fetchBalanceButton">Fetch Balance</button>
             </p>
             <p id="tokenBalance"></p>
             <p>
                 <label for="bulkContractAddress">Bulk Contract Address:</label>
-                <input type="text" id="bulkContractAddress" value="0xBbFe81A1B144a33d30d4D871b9737D3b7Be8F7de" 
+                <input type="text" id="bulkContractAddress" value="{{ bulk_contract_address }}" 
                        placeholder="Enter BulkSend contract address" autocomplete="off" />
             </p>
             <!-- CSV File upload form -->
@@ -345,7 +345,7 @@
                 return;
             }
             try {
-                // Minimal ERC20 ABI: balanceOf and decimals
+                // Minimal ERC20 ABI: balanceOf, decimals, and symbol
                 const erc20Abi = [
                     {
                         "constant": true,
@@ -363,6 +363,13 @@
                     },
                     {
                         "constant": true,
+                        "inputs": [],
+                        "name": "symbol",
+                        "outputs": [{"name": "", "type": "string"}],
+                        "type": "function"
+                    },
+                    {
+                        "constant": true,
                         "inputs": [
                             {"name": "_owner", "type": "address"},
                             {"name": "_spender", "type": "address"}
@@ -373,6 +380,13 @@
                     }
                 ];
                 const tokenContract = new web3.eth.Contract(erc20Abi, tokenAddress);
+                
+                // Fetch token symbol
+                let symbol = "Token";
+                if (typeof tokenContract.methods.symbol === 'function') {
+                    symbol = await tokenContract.methods.symbol().call();
+                }
+                
                 // Fetch decimals from the token contract; fallback to 18 if not available
                 let decimals = 18;
                 if (typeof tokenContract.methods.decimals === 'function') {
@@ -412,7 +426,7 @@
                 } else {
                     allowance = allowance / (10 ** decimals);
                 }
-                document.getElementById("tokenBalance").innerText = "Token Balance: " + balance + " ; Allowance: " + allowance;
+                document.getElementById("tokenBalance").innerText = "Token Balance: " + balance + " " + symbol + " ; Allowance: " + allowance + " " + symbol;
             } catch (err) {
                 console.error("Error fetching token balance", err);
                 setStatus("Failed to fetch token balance. Error: " + err.message);
