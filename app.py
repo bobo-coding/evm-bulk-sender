@@ -12,7 +12,7 @@ load_dotenv()
 app = Flask(__name__, static_folder='static')
 
 # Get default addresses from environment variables
-DEFAULT_TOKEN_ADDRESS = os.getenv('TOKEN_ADDRESS', '0xb7109df1a93f8fe2B8162c6207C9B846C1C68090')
+DEFAULT_TOKEN_ADDRESS = os.getenv('TOKEN_ADDRESS', '0xdAC17F958D2ee523a2206206994597C13D831ec7')
 DEFAULT_BULK_CONTRACT_ADDRESS = os.getenv('BULK_CONTRACT_ADDRESS', '0xBbFe81A1B144a33d30d4D871b9737D3b7Be8F7de')
 
 # Create a Web3 instance (no provider needed here for format conversion)
@@ -28,6 +28,16 @@ def index():
 def serve_static(path):
     return send_from_directory('static', path)
 
+@app.route('/favicon.ico')
+def favicon():
+    return send_from_directory(os.path.join(app.root_path, 'static'),
+                          'favicon.ico', mimetype='image/vnd.microsoft.icon')
+
+@app.route('/upload', methods=['POST'])
+def upload():
+    # Redirect to upload_csv function to handle both endpoint URLs
+    return upload_csv()
+
 @app.route('/upload-csv', methods=['POST'])
 def upload_csv():
     if 'file' not in request.files:
@@ -40,12 +50,15 @@ def upload_csv():
     
     if file and file.filename.endswith('.csv'):
         try:
-            # Read the CSV file
-            stream = io.StringIO(file.stream.read().decode("UTF8"), newline=None)
+            # Read the CSV file correctly
+            content = file.read()
+            stream = io.StringIO(content.decode("UTF-8", errors='replace'))
             csv_data = list(csv.reader(stream))
             
             # Process the CSV data
             recipients = []
+            amounts = []
+            
             for row in csv_data:
                 if len(row) >= 2:
                     address = row[0].strip()
@@ -53,13 +66,16 @@ def upload_csv():
                     
                     # Basic validation
                     if address.startswith('0x') and len(address) == 42:
-                        recipients.append({
-                            'address': address,
-                            'amount': amount
-                        })
+                        recipients.append(address)
+                        amounts.append(amount)
             
-            return jsonify({'recipients': recipients})
+            return jsonify({
+                'recipients': recipients,
+                'amounts': amounts
+            })
         except Exception as e:
+            import traceback
+            print(traceback.format_exc())
             return jsonify({'error': str(e)}), 500
     
     return jsonify({'error': 'Invalid file format. Please upload a CSV file.'}), 400
